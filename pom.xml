@@ -3,7 +3,7 @@
 
     <groupId>com.metaring</groupId>
     <artifactId>framework-ext-vertx-rpc</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2-SNAPSHOT</version>
 
     <name>MetaRing Vert.x RPC Extension</name>
     <description>RPC Extension made in Vert.x for the MetaRing Framework</description>
@@ -27,7 +27,7 @@
     <scm>
         <url>https://github.com/metaring/framework-ext-vertx-rpc.git</url>
         <developerConnection>scm:git:git@github.com:metaring/framework-ext-vertx-rpc.git</developerConnection>
-        <tag>v1.0.1</tag>
+        <tag>HEAD</tag>
     </scm>
 
     <dependencies>
