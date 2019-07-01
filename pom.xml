@@ -49,12 +49,12 @@
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>framework-ext-vertx</artifactId>
-            <version>1.0.2</version>
+            <version>1.0.3</version>
         </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>framework-java-broadcast</artifactId>
-            <version>1.0.2</version>
+            <version>1.0.3</version>
         </dependency>
         <dependency>
             <groupId>io.vertx</groupId>
