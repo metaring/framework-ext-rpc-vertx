@@ -239,6 +239,7 @@
                     <execution>
                         <phase>compile</phase>
                         <goals>
+                            <goal>use-releases</goal>
                             <goal>use-latest-releases</goal>
                         </goals>
                     </execution>
