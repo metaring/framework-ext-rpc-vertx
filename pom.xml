@@ -65,6 +65,7 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <ea.async.version>1.2.3</ea.async.version>
     </properties>
 
     <build>
@@ -133,7 +134,7 @@
             <plugin>
                 <groupId>com.ea.async</groupId>
                 <artifactId>ea-async-maven-plugin</artifactId>
-                <version>1.2.2</version>
+                <version>${ea.async.version}</version>
                 <executions>
                     <execution>
                         <goals>
