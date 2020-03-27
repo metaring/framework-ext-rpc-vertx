@@ -1,7 +1,6 @@
 package com.metaring.framework.ext.rpc.vertx;
 
 import java.net.URI;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import com.ea.async.Async;
@@ -11,8 +10,7 @@ import com.metaring.framework.Resources;
 import com.metaring.framework.SysKB;
 import com.metaring.framework.Tools;
 import com.metaring.framework.broadcast.BroadcastController;
-import com.metaring.framework.broadcast.BroadcastControllerManager;
-import com.metaring.framework.ext.vertx.VertxUtilties;
+import com.metaring.framework.ext.vertx.VertxUtilities;
 import com.metaring.framework.rpc.CallFunctionalityImpl;
 import com.metaring.framework.type.DataRepresentation;
 import com.metaring.framework.type.series.DigitSeries;
@@ -40,46 +38,65 @@ public final class VertxRPCController extends AbstractVerticle {
     protected static final String CFG_WEB_SERVICES_REST = "rest";
     protected static final String CFG_WEB_SERVICES_SOCKJS = "sockjs";
 
+    private static String REST_REDIRECT_FORMAT = "http";
+
     private static ComplementaryRoutingAction COMPLEMENTARY_ROUTING_ACTION;
     private static Runnable ON_START;
 
-    public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction, Runnable onStart) {
+    public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction, Consumer<ClusterMessage> clusterConsumer, Runnable onStart) {
         COMPLEMENTARY_ROUTING_ACTION = complementaryRoutingAction;
         ON_START = onStart;
+        ClusterHandler.CONSUMER.complete(clusterConsumer);
         SysKB sysKB = Core.SYSKB;
         int instances = 1;
         if (sysKB.hasProperty(Resources.CFG_EXT)) {
             DataRepresentation ext = sysKB.get(Resources.CFG_EXT);
-            if (ext.hasProperty(VertxUtilties.CFG_VERTX)) {
-                DataRepresentation vertx = ext.get(VertxUtilties.CFG_VERTX);
-                if (vertx.hasProperty(VertxUtilties.CFG_INSTANCES)) {
-                    instances = vertx.getDigit(VertxUtilties.CFG_INSTANCES).intValue();
+            if (ext.hasProperty(VertxUtilities.CFG_VERTX)) {
+                DataRepresentation vertx = ext.get(VertxUtilities.CFG_VERTX);
+                if (vertx.hasProperty(VertxUtilities.CFG_INSTANCES)) {
+                    instances = vertx.getDigit(VertxUtilities.CFG_INSTANCES).intValue();
                 }
             }
         }
-        VertxUtilties.INSTANCE.deployVerticle(VertxRPCController.class.getName(), new DeploymentOptions().setInstances(instances));
+        VertxUtilities.INSTANCE.deployVerticle(VertxRPCController.class.getName(), new DeploymentOptions().setInstances(instances));
     }
 
     public static final void run(String[] args) {
-        run(args, null, null);
+        run(args, null, null, null);
     }
 
     public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction) {
-        run(args, complementaryRoutingAction, null);
+        run(args, complementaryRoutingAction, null, null);
     }
 
     public static final void run(String[] args, Runnable onStart) {
-        run(args, null, onStart);
+        run(args, null, null, onStart);
+    }
+
+    public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction, Runnable onStart) {
+        run(args, complementaryRoutingAction, null, onStart);
+    }
+
+    public static final void run(String[] args, Consumer<ClusterMessage> clusterMessageConsumer) {
+        run(args, null, clusterMessageConsumer, null);
+    }
+
+    public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction, Consumer<ClusterMessage> clusterMessageConsumer) {
+        run(args, complementaryRoutingAction, clusterMessageConsumer, null);
+    }
+
+    public static final void run(String[] args, Consumer<ClusterMessage> clusterMessageConsumer, Runnable onStart) {
+        run(args, null, clusterMessageConsumer, onStart);
     }
 
     public static final void main(String[] args) {
-        run(args, null, null);
+        run(args, null, null, null);
     }
 
     @Override
     public final void start() throws Exception {
         String servicesAccessPointName;
-        DataRepresentation vertxWebServicesConfiguration = Core.SYSKB.get(Resources.CFG_EXT).get(VertxUtilties.CFG_VERTX).get(CFG_WEB_SERVICES);
+        DataRepresentation vertxWebServicesConfiguration = Core.SYSKB.get(Resources.CFG_EXT).get(VertxUtilities.CFG_VERTX).get(CFG_WEB_SERVICES);
         if (!(servicesAccessPointName = vertxWebServicesConfiguration.getText(CFG_WEB_SERVICES_ACCESS_POINT_NAME)).startsWith("/")) {
             servicesAccessPointName = "/" + servicesAccessPointName;
         }
@@ -105,6 +122,10 @@ public final class VertxRPCController extends AbstractVerticle {
             if (vertxWebServicesConfiguration.hasProperty(CFG_HTTPSERVER_OPTIONS)) {
                 serverOptions = new HttpServerOptions(new JsonObject(vertxWebServicesConfiguration.get(CFG_HTTPSERVER_OPTIONS).toJson()));
                 DataRepresentation httpServerOptions = vertxWebServicesConfiguration.get(CFG_HTTPSERVER_OPTIONS);
+                if(httpServerOptions.isTruth(CFG_SSL)) {
+                    REST_REDIRECT_FORMAT += "s";
+                }
+                REST_REDIRECT_FORMAT  += "://%s:" + servicesAccessPointPort + "/" + servicesAccessPointName;
                 if(httpServerOptions.isTruth(CFG_SSL) && httpServerOptions.getTruth(CFG_SSL) && httpServerOptions.isDigitSeries(CFG_HTTP_PORTS_TO_REDIRECT)) {
                     HTTPPortsToRedirect.addAll(httpServerOptions.getDigitSeries(CFG_HTTP_PORTS_TO_REDIRECT));
                 }
@@ -170,18 +191,33 @@ public final class VertxRPCController extends AbstractVerticle {
     }
 
     private final void consumePostRequest(RoutingContext routingContext) {
-        runAsync(new RequestData(routingContext).setStateless(), response -> routingContext.response().end(response));
+        ClusterHandler.connected().thenAcceptAsync(connection -> {
+            if(connection != null) {
+                routingContext.response().putHeader("Location", String.format(REST_REDIRECT_FORMAT, connection)).setStatusCode(307).end();
+                return;
+            }
+        });
+        runAsync(new RequestData(routingContext).setStateless(), response -> {
+            ClusterHandler.disconnected();
+            routingContext.response().end(response);
+        });
     }
 
     private final void consumeSockJsRequest(final SockJSSocket sockJSSocket) {
-        final RequestData requestData = new RequestData(sockJSSocket, tryAttachBroadcastComponents(sockJSSocket));
-        sockJSSocket.handler(buffer -> {
-            runAsync(requestData.copy(buffer), response -> {
-                this.vertx.runOnContext(v -> {
-                    sockJSSocket.write(response);
+        ClusterHandler.connected().thenAcceptAsync(connection -> {
+            if(connection != null) {
+                sockJSSocket.write("redirect=" + connection).close();
+                return;
+            }
+            final RequestData requestData = new RequestData(sockJSSocket, tryAttachBroadcastComponents(sockJSSocket));
+            sockJSSocket.handler(buffer -> {
+                runAsync(requestData.copy(buffer), response -> {
+                    this.vertx.runOnContext(v -> {
+                        sockJSSocket.write(response);
+                    });
                 });
             });
-        });
+        }, VertxUtilities.INSTANCE_AS_EXECUTOR);
     }
 
     public static final void runAsync(RequestData requestData, Consumer<Buffer> responseCallback) {
@@ -191,34 +227,23 @@ public final class VertxRPCController extends AbstractVerticle {
                 return;
             }
             responseCallback.accept(Buffer.buffer(result.getResult().toJson()));
-        }, VertxUtilties.INSTANCE_AS_EXECUTOR);
+        }, VertxUtilities.INSTANCE_AS_EXECUTOR);
     }
 
     private final String tryAttachBroadcastComponents(final SockJSSocket sockJSSocket) {
-        final String[] key = {null};
-        BroadcastControllerManager.INSTANCE.whenComplete((broadcastController, error) -> {
-            if(error != null) {
-                error.printStackTrace();
-                return;
-            }
-            if(broadcastController == null) {
-                return;
-            }
-            BiConsumer<String, Exception> response = (message, exception) -> {
-                if(exception != null) {
-                    exception.printStackTrace();
-                    return;
-                }
-                try {
-                    sockJSSocket.write(Buffer.buffer(message));
-                } catch(Exception e) {
-                    e.printStackTrace();
-                }
-            };
-            broadcastController.register(key[0] = sockJSSocket.remoteAddress().host() + "@" + System.currentTimeMillis() * Math.random(), response);
-            sockJSSocket.endHandler(v -> broadcastController.unregister(key[0]));
+        final String key = sockJSSocket.remoteAddress().host() + "@" + System.currentTimeMillis() * Math.random();
+        sockJSSocket.endHandler(v -> {
+            ClusterHandler.disconnected();
+            BroadcastController.unregister(key);
         });
-        return key[0];
+        BroadcastController.register(key, message -> {
+            try {
+                sockJSSocket.write(Buffer.buffer(message));
+            } catch(Exception e) {
+                e.printStackTrace();
+            }
+        });
+        return key;
     }
 
     @FunctionalInterface
