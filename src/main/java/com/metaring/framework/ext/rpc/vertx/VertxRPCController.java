@@ -46,8 +46,8 @@ public final class VertxRPCController extends AbstractVerticle {
     public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction, Consumer<ClusterMessage> clusterConsumer, Runnable onStart) {
         COMPLEMENTARY_ROUTING_ACTION = complementaryRoutingAction;
         ON_START = onStart;
-        ClusterHandler.CONSUMER.complete(clusterConsumer);
         SysKB sysKB = Core.SYSKB;
+        ClusterHandler.CONSUMER.complete(clusterConsumer);
         int instances = 1;
         if (sysKB.hasProperty(Resources.CFG_EXT)) {
             DataRepresentation ext = sysKB.get(Resources.CFG_EXT);
@@ -179,7 +179,7 @@ public final class VertxRPCController extends AbstractVerticle {
                     currentURI.getRawPath(),
                     currentURI.getRawQuery(),
                     currentURI.getRawFragment());
-                    context.response().putHeader("location", redirectURI.toString()).setStatusCode(302).end();
+                    context.response().putHeader("Location", redirectURI.toString()).setStatusCode(302).end();
             } catch (Exception e) {
                 e.printStackTrace();
                 context.fail(404);
@@ -206,7 +206,7 @@ public final class VertxRPCController extends AbstractVerticle {
     private final void consumeSockJsRequest(final SockJSSocket sockJSSocket) {
         ClusterHandler.connected().thenAcceptAsync(connection -> {
             if(connection != null) {
-                sockJSSocket.write("redirect=" + connection).close();
+                sockJSSocket.write("Location=" + connection).close();
                 return;
             }
             final RequestData requestData = new RequestData(sockJSSocket, tryAttachBroadcastComponents(sockJSSocket));
