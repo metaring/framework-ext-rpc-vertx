@@ -1,11 +1,17 @@
 package com.metaring.framework.ext.rpc.vertx;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
+import com.hazelcast.core.Member;
+import com.hazelcast.core.MemberAttributeEvent;
+import com.hazelcast.core.MembershipEvent;
+import com.hazelcast.core.MembershipListener;
 import com.metaring.framework.Tools;
 import com.metaring.framework.broadcast.BroadcastController;
 import com.metaring.framework.broadcast.Event;
@@ -17,34 +23,49 @@ import com.metaring.framework.util.StringUtil;
 
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
-import io.vertx.core.eventbus.Message;
 import io.vertx.spi.cluster.hazelcast.HazelcastClusterManager;
 
-public class ClusterHandler {
+public class ClusterManager {
 
     private static final CompletableFuture<Vertx> INSTANCE = new CompletableFuture<>();
-    private static final Map<String, Long> CLUSTERS = new HashMap<>();
-    public static final CompletableFuture<Consumer<ClusterMessage>> CONSUMER = new CompletableFuture<>();
+    private static final HazelcastClusterManager CLUSTER_MANAGER;
 
-    private static String NODE_ID;
+    public static final Map<String, Long> CLUSTERS = new HashMap<>();
+    public static final List<Consumer<ClusterMessage>> CONSUMERS = new ArrayList<>();
 
-    private static long connections = 0;
+    public static String NODE_ID;
+
+    public static long connections = 0;
 
     static {
         final HazelcastClusterManager[] manager = {null};
         try {
-            manager[0] = StringUtil.isNullOrEmpty(ClusterHandler.class.getClassLoader().getResource("cluster.xml").toString()) ? null : new HazelcastClusterManager();
+            manager[0] = StringUtil.isNullOrEmpty(ClusterManager.class.getClassLoader().getResource("cluster.xml").toString()) ? null : new HazelcastClusterManager();
         } catch (Exception e) {
         }
-        if (manager[0] == null) {
+        if ((CLUSTER_MANAGER = manager[0]) == null) {
             INSTANCE.complete(null);
         } else {
-            Vertx.clusteredVertx(new VertxOptions().setClusterManager(manager[0]), cluster -> {
+            Vertx.clusteredVertx(new VertxOptions().setClusterManager(CLUSTER_MANAGER), cluster -> {
                 if (cluster.succeeded()) {
                     Vertx vertx = cluster.result();
-                    vertx.eventBus().consumer("message", ClusterHandler::handle);
+                    vertx.eventBus().consumer("message", message -> handle(ClusterMessage.fromJson(message.body().toString())));
+                    CLUSTER_MANAGER.getHazelcastInstance().getCluster().addMembershipListener(new MembershipListener() {
+                        @Override
+                        public void memberRemoved(MembershipEvent event) {
+                            INSTANCE.thenAccept(it -> it.runOnContext(v -> handle(new ClusterMessage(event.getMember().getUuid() + "_" + (event.getMember().getSocketAddress().toString().replace("/", "").split(":")[0]), "unsync", null))));
+                        }
+
+                        @Override
+                        public void memberAttributeChanged(MemberAttributeEvent arg0) {
+                        }
+
+                        @Override
+                        public void memberAdded(MembershipEvent arg0) {
+                        }
+                    });
                     BroadcastController.register((type, element) -> publish("broadcast", Tools.FACTORY_DATA_REPRESENTATION.create().add("type", type).add("element", element)));
-                    NODE_ID = manager[0].getNodeID() + "_" + (manager[0].getHazelcastInstance().getLocalEndpoint().getSocketAddress().toString().replace("/", "").split(":")[0]);
+                    NODE_ID = CLUSTER_MANAGER.getNodeID() + "_" + (CLUSTER_MANAGER.getHazelcastInstance().getLocalEndpoint().getSocketAddress().toString().replace("/", "").split(":")[0]);
                     INSTANCE.complete(vertx);
                     publish("sync", connections);
                 } else {
@@ -54,27 +75,22 @@ public class ClusterHandler {
         }
     }
 
-    private static final void handle(Message<String> message) {
-        final ClusterMessage clusterMessage = ClusterMessage.fromJson(message.body());
-        if(NODE_ID.equalsIgnoreCase(clusterMessage.ID)) {
-            return;
-        }
-        try {
-            Method method = ClusterHandler.class.getDeclaredMethod(clusterMessage.topic, String.class, DataRepresentation.class);
-            method.setAccessible(true);
-            method.invoke(null, clusterMessage.ID, clusterMessage.data);
-        } catch (Exception e) {
-        }
-        CONSUMER.thenAcceptAsync(it -> {
-            if (it == null) {
-                return;
-            }
+    private static final void handle(final ClusterMessage clusterMessage) {
+        if(!NODE_ID.equalsIgnoreCase(clusterMessage.ID)) {
             try {
-                it.accept(clusterMessage);
+                Method method = ClusterManager.class.getDeclaredMethod(clusterMessage.topic, String.class, DataRepresentation.class);
+                method.setAccessible(true);
+                method.invoke(null, clusterMessage.ID, clusterMessage.data);
             } catch (Exception e) {
-                e.printStackTrace();
             }
-        }, VertxUtilities.INSTANCE_AS_EXECUTOR);
+        }
+        for(int i = 0; i < CONSUMERS.size(); i++) {
+            try {
+                Consumer<ClusterMessage> consumer = CONSUMERS.get(i);
+                VertxUtilities.INSTANCE.runOnContext(v -> consumer.accept(clusterMessage));
+            } catch(Exception e) {
+            }
+        }
     }
 
     @SuppressWarnings("unused")
@@ -84,14 +100,17 @@ public class ClusterHandler {
     }
 
     @SuppressWarnings("unused")
+    private static final void unsync(String caller, DataRepresentation dataRep) {
+        CLUSTERS.remove(caller);
+    }
+
+    @SuppressWarnings("unused")
     private static final void connections(String caller, DataRepresentation dataRep) {
         CLUSTERS.put(caller, dataRep.asDigit());
-        System.out.println(CLUSTERS);
     }
 
     @SuppressWarnings("unused")
     private static final void broadcast(String caller, DataRepresentation dataRep) {
-        System.out.println(dataRep);
         String type = dataRep.getText("type");
         if (type == "singleCallback") {
             BroadcastController.callback(dataRep.get("element").as(SingleCallback.class), VertxUtilities.INSTANCE_AS_EXECUTOR);
@@ -104,6 +123,16 @@ public class ClusterHandler {
         if (type == "multipleCallback") {
             BroadcastController.callback(dataRep.get("element").as(MultipleCallback.class), VertxUtilities.INSTANCE_AS_EXECUTOR);
             return;
+        }
+    }
+
+    public static final boolean isMaster() {
+        try {
+            Member member = CLUSTER_MANAGER.getHazelcastInstance().getCluster().getMembers().iterator().next();
+            return NODE_ID.equalsIgnoreCase(member.getUuid() + "_" + (member.getSocketAddress().toString().replace("/", "").split(":")[0]));
+        } catch(Exception e) {
+            e.printStackTrace();
+            return false;
         }
     }
 
@@ -131,7 +160,7 @@ public class ClusterHandler {
         if (NODE_ID == null) {
             return;
         }
-        INSTANCE.thenAcceptAsync(it -> it.runOnContext(h -> it.eventBus().publish("message", new ClusterMessage(NODE_ID, topic, o).toJson())));
+        INSTANCE.thenAccept(it -> it.runOnContext(h -> it.eventBus().publish("message", new ClusterMessage(NODE_ID, topic, o).toJson())));
     }
 
     public static final void publish(String topic) {

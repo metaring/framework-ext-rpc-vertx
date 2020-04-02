@@ -24,4 +24,8 @@ public class ClusterMessage {
         return new ClusterMessage(dataRep.getText("ID"), dataRep.getText("topic"), dataRep.get("data"));
     }
 
+    @Override
+    public final String toString() {
+        return toJson();
+    }
 }

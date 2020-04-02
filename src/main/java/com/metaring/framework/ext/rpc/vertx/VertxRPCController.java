@@ -43,11 +43,11 @@ public final class VertxRPCController extends AbstractVerticle {
     private static ComplementaryRoutingAction COMPLEMENTARY_ROUTING_ACTION;
     private static Runnable ON_START;
 
-    public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction, Consumer<ClusterMessage> clusterConsumer, Runnable onStart) {
+    public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction, Runnable onStart) {
         COMPLEMENTARY_ROUTING_ACTION = complementaryRoutingAction;
         ON_START = onStart;
         SysKB sysKB = Core.SYSKB;
-        ClusterHandler.CONSUMER.complete(clusterConsumer);
+        ClusterManager.CONSUMERS.isEmpty();
         int instances = 1;
         if (sysKB.hasProperty(Resources.CFG_EXT)) {
             DataRepresentation ext = sysKB.get(Resources.CFG_EXT);
@@ -62,35 +62,19 @@ public final class VertxRPCController extends AbstractVerticle {
     }
 
     public static final void run(String[] args) {
-        run(args, null, null, null);
+        run(args, null, null);
     }
 
     public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction) {
-        run(args, complementaryRoutingAction, null, null);
+        run(args, complementaryRoutingAction, null);
     }
 
     public static final void run(String[] args, Runnable onStart) {
-        run(args, null, null, onStart);
-    }
-
-    public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction, Runnable onStart) {
-        run(args, complementaryRoutingAction, null, onStart);
-    }
-
-    public static final void run(String[] args, Consumer<ClusterMessage> clusterMessageConsumer) {
-        run(args, null, clusterMessageConsumer, null);
-    }
-
-    public static final void run(String[] args, ComplementaryRoutingAction complementaryRoutingAction, Consumer<ClusterMessage> clusterMessageConsumer) {
-        run(args, complementaryRoutingAction, clusterMessageConsumer, null);
-    }
-
-    public static final void run(String[] args, Consumer<ClusterMessage> clusterMessageConsumer, Runnable onStart) {
-        run(args, null, clusterMessageConsumer, onStart);
+        run(args, null, onStart);
     }
 
     public static final void main(String[] args) {
-        run(args, null, null, null);
+        run(args, null, null);
     }
 
     @Override
@@ -191,20 +175,20 @@ public final class VertxRPCController extends AbstractVerticle {
     }
 
     private final void consumePostRequest(RoutingContext routingContext) {
-        ClusterHandler.connected().thenAcceptAsync(connection -> {
+        ClusterManager.connected().thenAcceptAsync(connection -> {
             if(connection != null) {
                 routingContext.response().putHeader("Location", String.format(REST_REDIRECT_FORMAT, connection)).setStatusCode(307).end();
                 return;
             }
         });
         runAsync(new RequestData(routingContext).setStateless(), response -> {
-            ClusterHandler.disconnected();
+            ClusterManager.disconnected();
             routingContext.response().end(response);
         });
     }
 
     private final void consumeSockJsRequest(final SockJSSocket sockJSSocket) {
-        ClusterHandler.connected().thenAcceptAsync(connection -> {
+        ClusterManager.connected().thenAcceptAsync(connection -> {
             if(connection != null) {
                 sockJSSocket.write("Location=" + connection).close();
                 return;
@@ -233,7 +217,7 @@ public final class VertxRPCController extends AbstractVerticle {
     private final String tryAttachBroadcastComponents(final SockJSSocket sockJSSocket) {
         final String key = sockJSSocket.remoteAddress().host() + "@" + System.currentTimeMillis() * Math.random();
         sockJSSocket.endHandler(v -> {
-            ClusterHandler.disconnected();
+            ClusterManager.disconnected();
             BroadcastController.unregister(key);
         });
         BroadcastController.register(key, message -> {
