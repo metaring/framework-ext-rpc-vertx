@@ -1,6 +1,8 @@
 package com.metaring.framework.ext.rpc.vertx;
 
 import java.net.URI;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.function.Consumer;
 
 import com.ea.async.Async;
@@ -14,22 +16,31 @@ import com.metaring.framework.ext.vertx.VertxUtilities;
 import com.metaring.framework.rpc.CallFunctionalityImpl;
 import com.metaring.framework.type.DataRepresentation;
 import com.metaring.framework.type.series.DigitSeries;
+import com.metaring.framework.type.series.TextSeries;
+import com.metaring.framework.util.ObjectUtil;
+import com.metaring.framework.util.StringUtil;
 
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
+import io.vertx.ext.web.handler.CorsHandler;
 import io.vertx.ext.web.handler.sockjs.SockJSHandler;
 import io.vertx.ext.web.handler.sockjs.SockJSSocket;
 
 public final class VertxRPCController extends AbstractVerticle {
     public static final String STANDARD_REQUEST_TEMPLATE = "{\"id\":%d, \"name\":\"%s\", \"ipAddress\":\"%s\", \"param\":\"%s\"}";
     protected static final String CFG_WEB_SERVICES = "webServices";
+    protected static final String CFG_CORS = "cors";
+    protected static final String CFG_CORS_ALLOWED_ORIGIN_PATTERN = "allowedOriginPattern";
+    protected static final String CFG_CORS_ALLOWED_HEADERS = "allowedHeaders";
+    protected static final String CFG_CORS_ALLOWED_METHODS = "allowedMethods";
     protected static final String CFG_HTTPSERVER_OPTIONS = "httpServerOptions";
     protected static final String CFG_SSL = "ssl";
     protected static final String CFG_HTTP_PORTS_TO_REDIRECT = "HTTPPortsToRedirect";
@@ -89,6 +100,7 @@ public final class VertxRPCController extends AbstractVerticle {
         }
         int servicesAccessPointPort = vertxWebServicesConfiguration.getDigit(CFG_WEB_SERVICES_ACCESS_POINT_PORT).intValue();
         Router router = Router.router(vertx);
+        tryAddCorsHandlerInfo(router, vertxWebServicesConfiguration);
         router.route().handler(BodyHandler.create());
         if (vertxWebServicesConfiguration.hasProperty(CFG_WEB_SERVICES_SOCKJS) && vertxWebServicesConfiguration.getTruth(CFG_WEB_SERVICES_SOCKJS)) {
             router.route(servicesAccessPointName + ".sock/*").handler(SockJSHandler.create(vertx).socketHandler(this::consumeSockJsRequest));
@@ -148,6 +160,24 @@ public final class VertxRPCController extends AbstractVerticle {
         }, null);
     }
 
+    private static void tryAddCorsHandlerInfo(Router router, DataRepresentation vertxWebServicesConfiguration) {
+        if(ObjectUtil.isNullOrEmpty(vertxWebServicesConfiguration.get(CFG_CORS)) || (vertxWebServicesConfiguration.isTruth(CFG_CORS) && !vertxWebServicesConfiguration.getTruth(CFG_CORS))) {
+            return;
+        }
+        DataRepresentation cors = vertxWebServicesConfiguration.get(CFG_CORS);
+        String allowedOriginPattern = cors.getText(CFG_CORS_ALLOWED_ORIGIN_PATTERN);
+        CorsHandler corsHandler = CorsHandler.create(StringUtil.isNullOrEmpty(allowedOriginPattern) ? "*" : allowedOriginPattern);
+        TextSeries allowedHeaders = cors.getTextSeries(CFG_CORS_ALLOWED_HEADERS);
+        if(!ObjectUtil.isNullOrEmpty(allowedHeaders)) {
+            corsHandler.allowedHeaders(new HashSet<>(allowedHeaders));
+        }
+        TextSeries allowedMethods = cors.getTextSeries(CFG_CORS_ALLOWED_METHODS);
+        if(!ObjectUtil.isNullOrEmpty(allowedMethods)) {
+            corsHandler.allowedMethods(new HashSet<>(Arrays.asList(allowedMethods.stream().map(HttpMethod::valueOf).toArray(HttpMethod[]::new))));
+        }
+        router.route().handler(corsHandler);
+    }
+
     private final void tryRedirectStandardHTTPRequests(DigitSeries HTTPPortsToRedirect, int servicesAccessPointPort) {
         if(HTTPPortsToRedirect == null || HTTPPortsToRedirect.isEmpty()) {
             return;
@@ -180,10 +210,10 @@ public final class VertxRPCController extends AbstractVerticle {
                 routingContext.response().putHeader("Location", String.format(REST_REDIRECT_FORMAT, connection)).setStatusCode(307).end();
                 return;
             }
-        });
-        runAsync(new RequestData(routingContext).setStateless(), response -> {
-            ClusterManager.disconnected();
-            routingContext.response().end(response);
+            runAsync(new RequestData(routingContext).setStateless(), response -> {
+                ClusterManager.disconnected();
+                routingContext.response().end(response);
+            });
         });
     }
 
